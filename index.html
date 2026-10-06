@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MoveMate — Free Moving Cost Estimator, Truck Size & Box Calculator</title>
+<meta name="description" content="MoveMate is a free moving cost calculator. Build a room-by-room inventory, get total volume, truck size, box count, packing supplies, and a DIY vs hired-movers cost comparison — no signup.">
+<script src="https://cdn.tailwindcss.com"></script>
+<script id="v3-movemate-moving-cost-estimator-lib">
+/* MoveMate pure logic — moving cost estimator.
+ * Pure functions only: no document/window access, no DOM, no network.
+ * Volume figures are packed-size estimates in cubic feet (ft3) for common
+ * household items, typical of moving-company inventory sheets. Costs are
+ * rough US-market estimates (2026-ish truck rental rates, mover hourly
+ * rates, long-distance per-mile math) intended for planning only.
+ */
+var MoveMate = (function () {
+  'use strict';
+
+  /* ------------------------------------------------------------------ */
+  /* Rooms                                                             */
+  /* ------------------------------------------------------------------ */
+  var ROOMS = [
+    { id: 'living',   label: 'Living Room' },
+    { id: 'bedroom',  label: 'Bedroom' },
+    { id: 'kitchen',  label: 'Kitchen' },
+    { id: 'dining',   label: 'Dining' },
+    { id: 'office',   label: 'Home Office' },
+    { id: 'bathroom', label: 'Bathroom' },
+    { id: 'garage',   label: 'Garage / Patio' },
+    { id: 'misc',     label: 'Already-Packed Boxes' }
+  ];
+
+  /* ------------------------------------------------------------------ */
+  /* Item catalog — packed volume estimates (cubic feet).                */
+  /* ------------------------------------------------------------------ */
+  var ITEMS = [
+    /* Living room */
+    { id: 'sofa-3',       name: 'Sofa (3-seat)',            room: 'living',   vol: 60 },
+    { id: 'loveseat',     name: 'Loveseat',                 room: 'living',   vol: 40 },
+    { id: 'armchair',     name: 'Armchair',                 room: 'living',   vol: 24 },
+    { id: 'recliner',     name: 'Recliner',                 room: 'living',   vol: 26 },
+    { id: 'coffee-table', name: 'Coffee table',             room: 'living',   vol: 16 },
+    { id: 'side-table',   name: 'Side table',               room: 'living',   vol: 6 },
+    { id: 'bookshelf',    name: 'Bookshelf (tall)',         room: 'living',   vol: 24 },
+    { id: 'tv-55',        name: 'TV (55" boxed)',           room: 'living',   vol: 10 },
+    { id: 'tv-stand',     name: 'TV stand / console',       room: 'living',   vol: 14 },
+    { id: 'floor-lamp',   name: 'Floor lamp',               room: 'living',   vol: 8 },
+    { id: 'rug-large',    name: 'Area rug (rolled)',        room: 'living',   vol: 6 },
+    { id: 'ottoman',      name: 'Ottoman',                  room: 'living',   vol: 9 },
+    /* Bedroom */
+    { id: 'queen-bed',    name: 'Queen bed (set)',          room: 'bedroom',  vol: 50 },
+    { id: 'king-bed',     name: 'King bed (set)',           room: 'bedroom',  vol: 60 },
+    { id: 'twin-bed',     name: 'Twin bed (set)',           room: 'bedroom',  vol: 32 },
+    { id: 'dresser',      name: 'Dresser (6-drawer)',       room: 'bedroom',  vol: 28 },
+    { id: 'nightstand',   name: 'Nightstand',               room: 'bedroom',  vol: 9 },
+    { id: 'wardrobe',     name: 'Wardrobe / armoire',       room: 'bedroom',  vol: 40 },
+    { id: 'crib',         name: 'Crib',                     room: 'bedroom',  vol: 22 },
+    { id: 'mirror',       name: 'Standing mirror',          room: 'bedroom',  vol: 4 },
+    /* Kitchen */
+    { id: 'fridge',       name: 'Refrigerator',             room: 'kitchen',  vol: 40 },
+    { id: 'range',        name: 'Range / stove',            room: 'kitchen',  vol: 26 },
+    { id: 'dishwasher',   name: 'Dishwasher',               room: 'kitchen',  vol: 16 },
+    { id: 'microwave',    name: 'Microwave',                room: 'kitchen',  vol: 5 },
+    { id: 'kitchen-cart', name: 'Kitchen cart / island',    room: 'kitchen',  vol: 10 },
+    { id: 'trash-can',    name: 'Trash can',                room: 'kitchen',  vol: 5 },
+    /* Dining */
+    { id: 'dining-table', name: 'Dining table',             room: 'dining',   vol: 30 },
+    { id: 'dining-chair', name: 'Dining chair',             room: 'dining',   vol: 7 },
+    { id: 'hutch',        name: 'China cabinet / hutch',    room: 'dining',   vol: 32 },
+    { id: 'bar-cart',     name: 'Bar cart',                 room: 'dining',   vol: 8 },
+    /* Office */
+    { id: 'desk',         name: 'Desk',                     room: 'office',   vol: 26 },
+    { id: 'office-chair', name: 'Office chair',             room: 'office',   vol: 14 },
+    { id: 'filing-cab',   name: 'Filing cabinet',           room: 'office',   vol: 20 },
+    { id: 'bookcase',     name: 'Bookcase (office)',        room: 'office',   vol: 24 },
+    { id: 'desktop-pc',   name: 'Desktop PC (boxed)',       room: 'office',   vol: 4 },
+    { id: 'printer',      name: 'Printer (boxed)',          room: 'office',   vol: 4 },
+    /* Bathroom */
+    { id: 'vanity',       name: 'Bathroom vanity',          room: 'bathroom', vol: 12 },
+    { id: 'linen-tower',  name: 'Linen tower',              room: 'bathroom', vol: 8 },
+    { id: 'hamper',       name: 'Laundry hamper',           room: 'bathroom', vol: 5 },
+    /* Garage / patio */
+    { id: 'bicycle',      name: 'Bicycle',                  room: 'garage',   vol: 12 },
+    { id: 'lawn-mower',   name: 'Lawn mower',               room: 'garage',   vol: 16 },
+    { id: 'tool-chest',   name: 'Tool chest',               room: 'garage',   vol: 10 },
+    { id: 'storage-bin',  name: 'Storage bin (large)',      room: 'garage',   vol: 6 },
+    { id: 'ladder',       name: 'Ladder',                   room: 'garage',   vol: 8 },
+    { id: 'patio-chair',  name: 'Patio chair',              room: 'garage',   vol: 8 },
+    { id: 'grill',        name: 'BBQ grill',                room: 'garage',   vol: 14 },
+    { id: 'wheelbarrow',  name: 'Wheelbarrow',              room: 'garage',   vol: 12 },
+    /* Already-packed boxes (counted at face volume) */
+    { id: 'box-small',    name: 'Small box (1.5 ft3)',      room: 'misc',     vol: 1.5 },
+    { id: 'box-medium',   name: 'Medium box (3 ft3)',       room: 'misc',     vol: 3 },
+    { id: 'box-large',    name: 'Large box (4.5 ft3)',      room: 'misc',     vol: 4.5 }
+  ];
+
+  var BED_IDS = ['queen-bed', 'king-bed', 'twin-bed', 'crib'];
+
+  /* ------------------------------------------------------------------ */
+  /* Trucks — cargo capacity (ft3), typical daily rental, fuel economy.  */
+  /* ------------------------------------------------------------------ */
+  var TRUCKS = [
+    { id: 'cargo-van', name: 'Cargo Van',        capacity: 285,  daily: 19.95, mpg: 14, seats: '2', box: '9 ft cargo' },
+    { id: 'truck-10',  name: '10-ft Truck',      capacity: 370,  daily: 19.95, mpg: 12, seats: '2', box: '10 x 6 x 6 ft' },
+    { id: 'truck-15',  name: '15-ft Truck',      capacity: 770,  daily: 29.95, mpg: 10, seats: '3', box: '15 x 7.5 x 7 ft' },
+    { id: 'truck-17',  name: '17-ft Truck',      capacity: 865,  daily: 39.95, mpg: 9,  seats: '3', box: '17 x 7.5 x 7.5 ft' },
+    { id: 'truck-20',  name: '20-ft Truck',      capacity: 1016, daily: 39.95, mpg: 9,  seats: '3', box: '20 x 7.5 x 8 ft' },
+    { id: 'truck-26',  name: '26-ft Truck',      capacity: 1410, daily: 49.95, mpg: 8,  seats: '3', box: '26 x 8 x 8.5 ft' }
+  ];
+
+  /* ------------------------------------------------------------------ */
+  /* Helpers                                                           */
+  /* ------------------------------------------------------------------ */
+  function num(v, fallback) {
+    var n = Number(v);
+    return (isFinite(n) ? n : fallback);
+  }
+
+  function cleanStr(s) {
+    return (s === null || s === undefined) ? '' : String(s).trim();
+  }
+
+  function round1(n) { return Math.round((n + 1e-9) * 10) / 10; }
+  function round2(n) { return Math.round((n + 1e-9) * 100) / 100; }
+
+  function fmtMoney(n) {
+    var v = Math.round(num(n, 0));
+    return '$' + v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Core API                                                          */
+  /* ------------------------------------------------------------------ */
+
+  function getItem(id) {
+    var key = cleanStr(id).toLowerCase();
+    if (!key) return null;
+    for (var i = 0; i < ITEMS.length; i++) {
+      if (ITEMS[i].id === key) return ITEMS[i];
+    }
+    return null;
+  }
+
+  function searchItems(query, roomId) {
+    var q = cleanStr(query).toLowerCase();
+    var room = cleanStr(roomId).toLowerCase() || 'all';
+    var out = [];
+    for (var i = 0; i < ITEMS.length; i++) {
+      var it = ITEMS[i];
+      if (room !== 'all' && it.room !== room) continue;
+      if (q && it.name.toLowerCase().indexOf(q) === -1) continue;
+      out.push(it);
+    }
+    return out;
+  }
+
+  function normalizeLine(line) {
+    if (!line) return null;
+    var it = getItem(line.itemId);
+    var qty = Math.floor(num(line.qty, 0));
+    if (!it || qty <= 0) return null;
+    return { itemId: it.id, qty: qty };
+  }
+
+  // Total packed volume (ft3) for an inventory list [{itemId, qty}].
+  // Unknown items / bad quantities are skipped gracefully.
+  function inventoryVolume(lines) {
+    var total = 0;
+    var list = Array.isArray(lines) ? lines : [];
+    for (var i = 0; i < list.length; i++) {
+      var l = normalizeLine(list[i]);
+      if (!l) continue;
+      total = round1(total + getItem(l.itemId).vol * l.qty);
+    }
+    return total;
+  }
+
+  function ft3ToM3(ft3) { return round2(num(ft3, 0) / 35.3147); }
+
+  // Recommends the smallest truck whose capacity covers volume * 1.2 margin.
+  // Returns { truck, index, needsTwoTrips, all: [{...t, fits}] }.
+  function recommendTruck(volumeFt3) {
+    var v = Math.max(0, num(volumeFt3, 0));
+    var need = v * 1.2;
+    var all = [];
+    var chosen = -1;
+    for (var i = 0; i < TRUCKS.length; i++) {
+      var fits = TRUCKS[i].capacity >= need;
+      if (fits && chosen === -1) chosen = i;
+      all.push({ id: TRUCKS[i].id, name: TRUCKS[i].name, capacity: TRUCKS[i].capacity,
+                 daily: TRUCKS[i].daily, mpg: TRUCKS[i].mpg, seats: TRUCKS[i].seats,
+                 box: TRUCKS[i].box, fits: fits });
+    }
+    var needsTwoTrips = chosen === -1 && v > 0;
+    return {
+      truck: chosen === -1 ? null : TRUCKS[chosen],
+      index: chosen,
+      needsTwoTrips: needsTwoTrips,
+      recommendedForEmpty: v === 0,
+      all: all
+    };
+  }
+
+  // Packing material estimates from total volume. inventory (optional)
+  // is used to count beds for mattress bags.
+  function packingMaterials(volumeFt3, lines) {
+    var v = Math.max(0, num(volumeFt3, 0));
+    if (v <= 0) {
+      return { small: 0, medium: 0, large: 0, totalBoxes: 0, tapeRolls: 0,
+               bubbleWrapFt: 0, paperLbs: 0, stretchRolls: 0, mattressBags: 0 };
+    }
+    var total = Math.ceil(v / 3.2);
+    var small = Math.ceil(total * 0.45);
+    var medium = Math.ceil(total * 0.35);
+    var large = Math.max(1, Math.ceil(total * 0.2));
+    var beds = 0;
+    var list = Array.isArray(lines) ? lines : [];
+    for (var i = 0; i < list.length; i++) {
+      var l = normalizeLine(list[i]);
+      if (!l) continue;
+      if (BED_IDS.indexOf(l.itemId) !== -1) beds += l.qty;
+    }
+    return {
+      small: small,
+      medium: medium,
+      large: large,
+      totalBoxes: small + medium + large,
+      tapeRolls: Math.max(2, Math.ceil(total / 20)),
+      bubbleWrapFt: Math.ceil(v * 0.8),
+      paperLbs: Math.ceil(v / 60),
+      stretchRolls: Math.ceil(v / 500),
+      mattressBags: beds > 0 ? beds : Math.max(1, Math.ceil(v / 600))
+    };
+  }
+
+  var BOX_PRICES = { small: 2.75, medium: 3.75, large: 4.75 };
+  var SUPPLY_PRICES = { tape: 4.5, bubblePerFt: 0.22, paperPerLb: 1.4, stretch: 9, mattressBag: 8 };
+  var MILEAGE_RATE = 0.89;   // $/mile typical rental mileage fee
+  var GAS_PRICE = 3.60;      // $/gallon assumption
+
+  // Material supply cost from a packingMaterials() result.
+  function materialsCost(mat) {
+    var m = mat || {};
+    return round2(
+      num(m.small, 0) * BOX_PRICES.small +
+      num(m.medium, 0) * BOX_PRICES.medium +
+      num(m.large, 0) * BOX_PRICES.large +
+      num(m.tapeRolls, 0) * SUPPLY_PRICES.tape +
+      num(m.bubbleWrapFt, 0) * SUPPLY_PRICES.bubblePerFt +
+      num(m.paperLbs, 0) * SUPPLY_PRICES.paperPerLb +
+      num(m.stretchRolls, 0) * SUPPLY_PRICES.stretch +
+      num(m.mattressBags, 0) * SUPPLY_PRICES.mattressBag
+    );
+  }
+
+  // DIY estimate: rental + mileage + fuel + materials. distance in miles.
+  function estimateDIY(volumeFt3, distanceMiles, lines) {
+    var v = Math.max(0, num(volumeFt3, 0));
+    var d = Math.max(0, num(distanceMiles, 0));
+    var rec = recommendTruck(v);
+    var t = rec.truck || TRUCKS[TRUCKS.length - 1];
+    var days = Math.max(1, Math.ceil(d / 400));
+    var rental = round2(t.daily * days);
+    var mileage = round2(MILEAGE_RATE * d);
+    var fuel = round2((d / t.mpg) * GAS_PRICE);
+    var mat = packingMaterials(v, lines);
+    var supplies = materialsCost(mat);
+    var mid = round2(rental + mileage + fuel + supplies);
+    return {
+      ok: true, truck: t, days: days,
+      parts: { rental: rental, mileage: mileage, fuel: fuel, supplies: supplies },
+      low: Math.round(mid * 0.9), mid: Math.round(mid), high: Math.round(mid * 1.15)
+    };
+  }
+
+  // Hired-mover estimate. <100 mi = local hourly crew; >=100 mi = long haul.
+  function estimateMovers(volumeFt3, distanceMiles) {
+    var v = Math.max(0, num(volumeFt3, 0));
+    var d = Math.max(0, num(distanceMiles, 0));
+    if (d < 100) {
+      var crew, rate;
+      if (v < 400)      { crew = 2; rate = 110; }
+      else if (v < 900) { crew = 3; rate = 150; }
+      else              { crew = 4; rate = 195; }
+      var hours = Math.max(3, round1(2 + v / 140));
+      var mid = round2(rate * hours);
+      return {
+        ok: true, kind: 'local', crew: crew, hourlyRate: rate, hours: hours,
+        parts: { labor: mid },
+        low: Math.round(mid * 0.85), mid: Math.round(mid), high: Math.round(mid * 1.3)
+      };
+    }
+    var mid = round2(1.15 * v + 2.8 * d);
+    return {
+      ok: true, kind: 'longhaul', crew: v < 900 ? 3 : 4, hourlyRate: 0, hours: 0,
+      parts: { linehaul: round2(2.8 * d), volumeFee: round2(1.15 * v) },
+      low: Math.round(mid * 0.8), mid: Math.round(mid), high: Math.round(mid * 1.25)
+    };
+  }
+
+  // Side-by-side comparison object used by the results panel.
+  function compareMoves(volumeFt3, distanceMiles, lines) {
+    var diy = estimateDIY(volumeFt3, distanceMiles, lines);
+    var movers = estimateMovers(volumeFt3, distanceMiles);
+    var diff = diy.mid - movers.mid;
+    return {
+      diy: diy,
+      movers: movers,
+      savingsByDIY: Math.abs(diff),
+      cheaper: diff === 0 ? 'tie' : (diff < 0 ? 'diy' : 'movers')
+    };
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Moving-week timeline checklist                                    */
+  /* ------------------------------------------------------------------ */
+  var TIMELINE = [
+    { phase: '14 days out', daysOut: 14, tasks: [
+      'Book your truck or movers — prices climb in the final week',
+      'Declutter room by room: sell, donate, or toss what is not worth moving',
+      'Start a "moving binder" with quotes, receipts, and this checklist',
+      'Notify your landlord or list your place if you are selling',
+      'Request time off work for moving day'
+    ]},
+    { phase: '7 days out', daysOut: 7, tasks: [
+      'Buy or order boxes, tape, and wrap using the packing estimate above',
+      'Pack non-essentials first: books, decor, off-season clothes',
+      'Confirm your truck reservation or mover booking in writing',
+      'Schedule utility shut-off and set-up dates for both addresses',
+      'File a change-of-address with the post office'
+    ]},
+    { phase: '2 days out', daysOut: 2, tasks: [
+      'Pack an "essentials bag": chargers, toiletries, meds, snacks, documents',
+      'Disassemble beds, desks, and large furniture; bag the hardware',
+      'Defrost the freezer and drain the washing machine',
+      'Charge your phone and camera for moving-day photos',
+      'Do a final grocery run — empty the fridge and pantry'
+    ]},
+    { phase: 'Moving day', daysOut: 0, tasks: [
+      'Walk through with your inventory list and load heavy items first',
+      'Protect floors and doorways; wrap furniture before it leaves the room',
+      'Record utility meter readings and take photos of every room',
+      'Do one last sweep: closets, attic, garage, and storage unit',
+      'Tip movers or thank helpers, then lock up and hand over keys'
+    ]},
+    { phase: 'After the move', daysOut: -1, tasks: [
+      'Unpack essentials bag first, then kitchen, then bedrooms',
+      'Update your address: bank, insurance, subscriptions, voter registration',
+      'Check every box against your inventory before the movers leave',
+      'Break down boxes and recycle packing paper promptly',
+      'Meet the neighbors — you made it!'
+    ]}
+  ];
+
+  function timelinePhases() {
+    return TIMELINE.map(function (p) { return p.phase; });
+  }
+
+  function buildTimeline() {
+    return TIMELINE.map(function (p) {
+      return { phase: p.phase, daysOut: p.daysOut, tasks: p.tasks.slice() };
+    });
+  }
+
+  function roomLabel(roomId) {
+    for (var i = 0; i < ROOMS.length; i++) {
+      if (ROOMS[i].id === roomId) return ROOMS[i].label;
+    }
+    return roomId;
+  }
+
+  function itemCount() { return ITEMS.length; }
+  function roomCount() { return ROOMS.length; }
+
+  return {
+    ROOMS: ROOMS,
+    ITEMS: ITEMS,
+    TRUCKS: TRUCKS,
+    getItem: getItem,
+    searchItems: searchItems,
+    normalizeLine: normalizeLine,
+    inventoryVolume: inventoryVolume,
+    ft3ToM3: ft3ToM3,
+    recommendTruck: recommendTruck,
+    packingMaterials: packingMaterials,
+    materialsCost: materialsCost,
+    estimateDIY: estimateDIY,
+    estimateMovers: estimateMovers,
+    compareMoves: compareMoves,
+    timelinePhases: timelinePhases,
+    buildTimeline: buildTimeline,
+    roomLabel: roomLabel,
+    fmtMoney: fmtMoney,
+    itemCount: itemCount,
+    roomCount: roomCount
+  };
+})();
+
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "How much does it cost to move a one-bedroom apartment?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "A local move of a one-bedroom apartment (about 300 to 500 cubic feet of belongings) typically costs $300 to $700 if you rent a truck and do it yourself, or $500 to $1,200 with professional movers for a short-distance move. MoveMate estimates both options side by side from your actual inventory, so you can see the real DIY vs mover gap instead of guessing."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How many boxes do I need to move?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "A common rule of thumb is one moving box for every 3 to 3.5 cubic feet of belongings, split roughly 45% small, 35% medium, and 20% large boxes. A studio apartment (about 200 cubic feet) needs roughly 60 boxes; a two-bedroom home (500 to 700 cubic feet) needs 150 to 220 boxes. MoveMate calculates the exact count from your inventory volume, plus tape rolls, bubble wrap, packing paper, stretch wrap, and mattress bags."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What size moving truck do I need?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Match your total cubic footage to truck capacity with a 20% safety margin. A cargo van or 10-ft truck (285 to 370 cubic feet) handles a studio; a 15-ft truck (770 cubic feet) suits a two-bedroom; a 20 to 26-ft truck (1,000 to 1,400 cubic feet) covers three to four bedrooms. MoveMate recommends the smallest truck that fits your inventory so you never overpay for empty space."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is it cheaper to move yourself or hire movers?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "DIY is almost always cheaper in raw dollars — often 40 to 60% less than hiring movers for a local move — because you skip labor costs. But movers save hours of heavy work and include basic liability coverage. For long-distance moves, the gap narrows because truck mileage and fuel add up. MoveMate shows both totals side by side with a full cost breakdown so you can weigh dollars against effort."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How far in advance should I book movers or a rental truck?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Book movers 4 to 8 weeks ahead for summer or end-of-month dates, and at least 2 weeks ahead in the off-season. Rental trucks are easier to get — one to two weeks is usually enough, though holiday weekends sell out. MoveMate's moving-week timeline checklist starts 14 days out so nothing slips through the cracks."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do movers calculate the volume of my belongings?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Movers assign a packed cubic-foot volume to each furniture item — a three-seat sofa is about 60 cubic feet, a queen bed set about 50 — then add a loading margin. MoveMate uses the same method with a built-in volume table for 50+ common items, so your estimate matches how the industry actually prices your move."
+      }
+    }
+  ]
+}
+</script>
+<style>
+  body { background:#1a1f2e; color:#e8ecf5; font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .brand-orange { color:#fb923c; }
+  .brand-sky { color:#38bdf8; }
+  .panel { background:#232a3f; border:1px solid #323c58; border-radius:1rem; }
+  .step-dot { width:2.25rem; height:2.25rem; border-radius:9999px; display:flex; align-items:center; justify-content:center; font-weight:800; background:#2b3350; color:#9aa5c4; border:1px solid #3a4566; }
+  .step-dot.active { background:#fb923c; color:#1a1f2e; border-color:#fb923c; }
+  .qty-btn { width:2rem; height:2rem; border-radius:0.5rem; background:#2b3350; color:#fb923c; font-weight:800; border:1px solid #3a4566; }
+  .qty-btn:hover { background:#fb923c; color:#1a1f2e; }
+  .room-tab { padding:.45rem .8rem; border-radius:9999px; font-size:.8rem; font-weight:600; background:#2b3350; color:#9aa5c4; border:1px solid #3a4566; white-space:nowrap; }
+  .room-tab.active { background:#38bdf8; color:#0c1626; border-color:#38bdf8; }
+  .bar-track { background:#12172a; border-radius:.5rem; overflow:hidden; height:.65rem; }
+  .bar-fill { height:100%; background:linear-gradient(90deg,#fb923c,#f97316); border-radius:.5rem; transition:width .4s ease; }
+  .bar-fill-sky { background:linear-gradient(90deg,#38bdf8,#0ea5e9); }
+  details.faq { background:#232a3f; border:1px solid #323c58; border-radius:.75rem; padding:1rem 1.25rem; }
+  details.faq summary { cursor:pointer; font-weight:700; color:#fb923c; }
+  .no-print { }
+  ::-webkit-scrollbar { height:8px; width:8px; }
+  ::-webkit-scrollbar-thumb { background:#3a4566; border-radius:4px; }
+</style>
+</head>
+<body id="top">
+
+<!-- Sticky header -->
+<header class="sticky top-0 z-50" style="background:rgba(26,31,46,.92); backdrop-filter:blur(8px); border-bottom:1px solid #323c58;">
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 py-3 flex items-center justify-between">
+    <a href="#top" class="text-xl font-black tracking-tight"><span class="brand-orange">Move</span><span class="brand-sky">Mate</span></a>
+    <nav class="text-sm font-semibold">
+      <a href="#top" class="text-slate-300 hover:text-white mr-5">Home</a>
+      <a href="https://fixoraa.tech" class="brand-orange hover:underline">More Tools</a>
+    </nav>
+  </div>
+</header>
+
+<!-- TOP AD -->
+<div class="no-print mx-auto max-w-6xl px-4 sm:px-6 pt-4" role="complementary" aria-label="Advertisement">
+  <div class="mx-auto text-center" style="max-width:728px">
+    <span class="block text-[10px] tracking-[0.18em] uppercase text-slate-400 mb-1.5">Advertisement</span>
+    <div class="flex justify-center overflow-hidden">
+      <div class="origin-top scale-[0.44] sm:scale-100 shrink-0">
+        <script>
+          atOptions = { 'key' : '4e68ac77881c17fe128a46565d9a4e8c', 'format' : 'iframe', 'height' : 90, 'width' : 728, 'params' : {} };
+        </script>
+        <script src="https://www.highrevenueformat.com/4e68ac77881c17fe128a46565d9a4e8c/invoke.js"></script>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Hero + pipeline steps -->
+<section class="mx-auto max-w-6xl px-4 sm:px-6 pt-8 pb-4">
+  <div class="flex flex-wrap items-center gap-3 mb-4">
+    <h1 class="text-3xl sm:text-4xl font-black">Moving Cost <span class="brand-orange">Estimator</span></h1>
+    <span class="text-xs font-bold uppercase tracking-widest bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 rounded-full px-3 py-1">Unlimited Free Usage</span>
+  </div>
+  <p class="text-slate-400 max-w-2xl mb-6">Build your inventory room by room. MoveMate converts it into cubic feet, picks the right truck, counts your boxes, and compares DIY vs hired-mover costs — free, no signup, nothing leaves your browser.</p>
+  <div id="stepRow" class="flex flex-wrap items-center gap-2 sm:gap-4 text-sm font-semibold">
+    <div class="flex items-center gap-2"><span class="step-dot active">1</span><span class="text-slate-300">Inventory</span></div>
+    <div class="flex items-center gap-2"><span class="step-dot active">2</span><span class="text-slate-300">Truck</span></div>
+    <div class="flex items-center gap-2"><span class="step-dot active">3</span><span class="text-slate-300">Packing</span></div>
+    <div class="flex items-center gap-2"><span class="step-dot active">4</span><span class="text-slate-300">DIY vs Movers</span></div>
+    <div class="flex items-center gap-2"><span class="step-dot active">5</span><span class="text-slate-300">Timeline</span></div>
+  </div>
+</section>
+
+<!-- Main tool -->
+<main class="mx-auto max-w-6xl px-4 sm:px-6 pb-8">
+  <div class="grid lg:grid-cols-5 gap-5">
+
+    <!-- LEFT: inventory builder -->
+    <section class="lg:col-span-2 panel p-5">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-extrabold">1 · Your <span class="brand-orange">Inventory</span></h2>
+        <span id="invCount" class="text-xs font-bold text-slate-400">0 items</span>
+      </div>
+      <input id="searchInput" type="text" placeholder="Search items… (e.g. sofa, bed, fridge)"
+             class="w-full mb-3 px-3 py-2 rounded-lg text-sm text-slate-100 placeholder-slate-500"
+             style="background:#12172a;border:1px solid #3a4566;">
+      <div id="roomTabs" class="flex gap-2 overflow-x-auto pb-2 mb-3"></div>
+      <div id="itemGrid" class="space-y-2 max-h-96 overflow-y-auto pr-1"></div>
+      <div class="mt-4">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-sm font-extrabold text-slate-300">Inventory list</h3>
+          <button id="clearInv" class="text-xs font-bold text-rose-300 hover:text-rose-200 border border-rose-500/40 rounded-full px-3 py-1">Clear all</button>
+        </div>
+        <div id="invList" class="space-y-1.5 max-h-56 overflow-y-auto pr-1 text-sm"></div>
+      </div>
+    </section>
+
+    <!-- RIGHT: results panels -->
+    <section class="lg:col-span-3 space-y-5">
+
+      <!-- Volume + truck -->
+      <div class="panel p-5">
+        <h2 class="text-lg font-extrabold mb-3">2 · Volume & <span class="brand-sky">Truck Size</span></h2>
+        <div class="flex flex-wrap items-end gap-6 mb-4">
+          <div><div class="text-4xl font-black brand-orange" id="volFt3">0</div><div class="text-xs text-slate-400 font-semibold">cubic feet</div></div>
+          <div><div class="text-2xl font-extrabold brand-sky" id="volM3">0</div><div class="text-xs text-slate-400 font-semibold">cubic meters</div></div>
+          <div class="flex-1 min-w-[180px]">
+            <div class="flex justify-between text-xs font-bold text-slate-400 mb-1"><span id="truckName">Add items to get a recommendation</span><span id="truckCap"></span></div>
+            <div class="bar-track"><div id="truckFill" class="bar-fill" style="width:0%"></div></div>
+          </div>
+        </div>
+        <div id="truckDims" class="text-xs text-slate-400 mb-3"></div>
+        <div id="truckTable" class="space-y-1.5 text-sm"></div>
+      </div>
+
+      <!-- Packing materials -->
+      <div class="panel p-5">
+        <h2 class="text-lg font-extrabold mb-3">3 · Packing <span class="brand-orange">Materials</span></h2>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center mb-4">
+          <div class="rounded-xl p-3" style="background:#12172a;border:1px solid #323c58;"><div id="packSmall" class="text-2xl font-black brand-sky">0</div><div class="text-xs text-slate-400 font-semibold">Small boxes</div></div>
+          <div class="rounded-xl p-3" style="background:#12172a;border:1px solid #323c58;"><div id="packMedium" class="text-2xl font-black brand-sky">0</div><div class="text-xs text-slate-400 font-semibold">Medium boxes</div></div>
+          <div class="rounded-xl p-3" style="background:#12172a;border:1px solid #323c58;"><div id="packLarge" class="text-2xl font-black brand-sky">0</div><div class="text-xs text-slate-400 font-semibold">Large boxes</div></div>
+          <div class="rounded-xl p-3" style="background:#12172a;border:1px solid #323c58;"><div id="packTotal" class="text-2xl font-black brand-orange">0</div><div class="text-xs text-slate-400 font-semibold">Total boxes</div></div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center text-sm">
+          <div><div id="tapeRolls" class="font-extrabold text-lg">0</div><div class="text-xs text-slate-400">Tape rolls</div></div>
+          <div><div id="bubbleWrap" class="font-extrabold text-lg">0</div><div class="text-xs text-slate-400">Bubble wrap (ft)</div></div>
+          <div><div id="paperLbs" class="font-extrabold text-lg">0</div><div class="text-xs text-slate-400">Packing paper (lbs)</div></div>
+          <div><div id="stretchRolls" class="font-extrabold text-lg">0</div><div class="text-xs text-slate-400">Stretch wrap rolls</div></div>
+          <div><div id="mattressBags" class="font-extrabold text-lg">0</div><div class="text-xs text-slate-400">Mattress bags</div></div>
+        </div>
+        <div class="mt-3 text-xs text-slate-400">Estimated supply cost: <span id="matCost" class="font-bold text-slate-200">$0</span> <span class="text-slate-500">(retail box prices)</span></div>
+      </div>
+
+      <!-- DIY vs movers -->
+      <div class="panel p-5">
+        <h2 class="text-lg font-extrabold mb-3">4 · DIY vs <span class="brand-sky">Hired Movers</span></h2>
+        <label class="block text-xs font-bold text-slate-400 mb-1">Distance (miles, one way)</label>
+        <input id="distInput" type="number" min="0" value="25" class="w-40 mb-4 px-3 py-2 rounded-lg text-sm text-slate-100" style="background:#12172a;border:1px solid #3a4566;">
+        <div id="compareVerdict" class="mb-4 text-sm font-bold"></div>
+        <div class="grid sm:grid-cols-2 gap-4">
+          <div class="rounded-xl p-4" style="background:#12172a;border:1px solid #fb923c55;">
+            <h3 class="font-extrabold brand-orange mb-1">DIY — Rent a Truck</h3>
+            <div class="text-3xl font-black mb-1" id="diyMid">$0</div>
+            <div class="text-xs text-slate-400 mb-3">Range: <span id="diyLow">$0</span> – <span id="diyHigh">$0</span></div>
+            <div id="diyBreakdown" class="text-xs text-slate-300 space-y-1"></div>
+          </div>
+          <div class="rounded-xl p-4" style="background:#12172a;border:1px solid #38bdf855;">
+            <h3 class="font-extrabold brand-sky mb-1">Hired Movers</h3>
+            <div class="text-3xl font-black mb-1" id="moverMid">$0</div>
+            <div class="text-xs text-slate-400 mb-3">Range: <span id="moverLow">$0</span> – <span id="moverHigh">$0</span></div>
+            <div id="moverDetail" class="text-xs text-slate-300 space-y-1"></div>
+          </div>
+        </div>
+        <p class="mt-3 text-xs text-slate-500">Estimates for planning only — rental rates, mileage fees, and mover quotes vary by city and season. Always get a written quote.</p>
+      </div>
+
+      <!-- Timeline -->
+      <div class="panel p-5">
+        <h2 class="text-lg font-extrabold mb-3">5 · Moving-Week <span class="brand-orange">Timeline</span></h2>
+        <div id="timelineList" class="space-y-4"></div>
+      </div>
+
+    </section>
+  </div>
+</main>
+
+<!-- BOTTOM AD -->
+<div class="no-print mx-auto max-w-6xl px-4 sm:px-6 pb-4" role="complementary" aria-label="Advertisement">
+  <div class="mx-auto text-center" style="max-width:728px">
+    <span class="block text-[10px] tracking-[0.18em] uppercase text-slate-400 mb-1.5">Advertisement</span>
+    <div class="flex justify-center overflow-hidden">
+      <script async src="https://js.wpadmngr.com/static/adManager.js" data-admpid="464498"></script>
+    </div>
+  </div>
+</div>
+
+<!-- SEO article -->
+<article id="seo-article" class="mx-auto max-w-4xl px-4 sm:px-6 pb-10 text-slate-300 leading-relaxed">
+  <h2 class="text-2xl font-black text-white mb-4">The Complete Guide to Moving Costs: Calculator, Truck Sizes, and Box Counts</h2>
+
+  <h3 class="text-xl font-extrabold text-white mt-8 mb-3">How a moving cost calculator actually works</h3>
+  <p class="mb-4">Every honest moving cost calculator starts from the same number: the total cubic footage of your belongings. Movers, truck rental companies, and shipping container services all think in cubic feet because it is the only unit that captures both the size and the awkwardness of real furniture. A king-size mattress set is not just heavy — it is roughly 60 cubic feet of space that no box will ever fit into, and it dictates which truck you need before a single box is counted.</p>
+  <p class="mb-4">The method the industry uses is disarmingly simple. Each furniture item gets a packed volume: a three-seat sofa is about 60 cubic feet, a queen bed set about 50, a refrigerator about 40, a standard bookshelf about 24. Add up every item and you get your gross volume. Then a loading margin of around 15 to 20 percent is applied, because furniture never packs together perfectly — there are always gaps, odd shapes, and the Tetris problem of a dining table leg that refuses to nest against a wardrobe.</p>
+  <p class="mb-4">That single number then drives everything else. Truck capacity is measured in cubic feet, box counts scale almost linearly with volume, crew size for hired movers is chosen by volume bands, and long-distance quotes use a per-cubic-foot rate on top of a mileage charge. When you type your inventory into MoveMate, the calculator reproduces this exact industry logic: a baked-in volume table for more than fifty common items, a 20 percent loading margin, and truck recommendations that match the smallest vehicle that can genuinely hold your stuff.</p>
+  <p class="mb-4">Why does this matter more than a "1 bedroom / 2 bedroom" slider? Because two one-bedroom apartments can differ by 300 cubic feet or more. A minimalist's studio might total 150 cubic feet while a collector's one-bedroom with a garage full of tools pushes past 600. Flat room-count calculators systematically under-price the second person and over-price the first. A room-by-room inventory never has that problem — it measures your home, not an average home.</p>
+
+  <h3 class="text-xl font-extrabold text-white mt-8 mb-3">How many boxes do I need to move?</h3>
+  <p class="mb-4">"How many boxes do I need to move" is one of the most searched moving questions in the world, and the answer is refreshingly formulaic: plan on roughly one box for every 3 to 3.5 cubic feet of total belongings. The furniture in your home typically accounts for 60 to 70 percent of your volume; the rest is the loose stuff — clothes, kitchenware, books, toys — that goes in boxes. That is why the box count scales so cleanly with total volume.</p>
+  <p class="mb-4">The standard split that professional packers use is about 45 percent small boxes, 35 percent medium boxes, and 20 percent large boxes. Small boxes (around 1.5 cubic feet) are for heavy, dense things: books, canned food, tools. Medium boxes (around 3 cubic feet) are the workhorses — kitchen items, toys, shoes, folded clothes. Large boxes (around 4.5 cubic feet) are for light, bulky things: pillows, bedding, lampshades. Never pack heavy items in large boxes unless you enjoy back injuries and burst seams.</p>
+  <p class="mb-4">Here is what the rule produces for typical homes. A studio apartment of roughly 200 cubic feet needs about 60 boxes: 27 small, 21 medium, 12 large. A one-bedroom home around 400 cubic feet needs about 125 boxes. A two-bedroom home in the 600 cubic foot range needs roughly 190 boxes. A three-bedroom house approaching 1,000 cubic feet needs about 300 boxes, and a four-bedroom house at 1,400 cubic feet needs 430 or more. MoveMate computes this automatically from your inventory and rounds every count up, because running out of boxes at 9 p.m. the night before moving day is a special kind of misery.</p>
+  <p class="mb-4">Beyond boxes, the supporting supplies scale with volume too. Count one roll of packing tape for every 20 boxes, with a minimum of two rolls — tape is the one supply everyone underestimates. Bubble wrap runs about 0.8 feet per cubic foot of belongings for a typical household with normal fragiles. Packing paper runs about one pound per 60 cubic feet. Stretch wrap is roughly one roll per 500 cubic feet, mostly for bundling furniture and keeping drawers shut. And every bed gets a mattress bag, because a mattress that has touched a truck floor is a mattress you will think about for years.</p>
+
+  <h3 class="text-xl font-extrabold text-white mt-8 mb-3">What size moving truck do I need?</h3>
+  <p class="mb-4">Choosing the right truck is the highest-leverage decision in a DIY move. Too small and you are making two trips — doubling your mileage charges, fuel, and exhaustion. Too big and you are paying a higher daily rate, worse fuel economy, and trying to park a 26-foot box truck on a residential street. The rule is the same as everything else in moving: match capacity to your volume plus a 20 percent margin, then pick the smallest truck that clears it.</p>
+  <p class="mb-4">The standard rental fleet, from smallest to largest, looks like this. A cargo van offers about 285 cubic feet — perfect for a lightly furnished studio or a dorm room. A 10-foot truck holds about 370 cubic feet, enough for a studio or small one-bedroom. A 15-foot truck holds about 770 cubic feet and is the sweet spot for a typical two-bedroom apartment. A 17-foot truck at 865 cubic feet handles a large two-bedroom or small three-bedroom. A 20-foot truck at just over 1,000 cubic feet covers most three-bedroom homes. A 26-foot truck at about 1,410 cubic feet is the largest you can drive without a commercial license in most places, and it swallows a four-bedroom house in one load.</p>
+  <p class="mb-4">Notice the fuel economy cliff: a cargo van gets around 14 miles per gallon, but a 26-foot truck gets about 8. On a 500-mile move that difference alone is roughly $120 in fuel. Add mileage fees of about $0.89 per mile — the standard rental-company charge — and the real cost of "just get the big one" becomes obvious. MoveMate's recommender exists precisely to prevent that: it finds the smallest truck whose capacity covers your volume plus margin, and it warns you if even the biggest truck would need two trips.</p>
+  <p class="mb-4">One more truck tip that rental counters will not volunteer: measure your largest single item against the truck's door opening, not just its volume. A 36-inch-wide refrigerator fits through every rental truck door, but an oversized sectional sofa section or a grandfather clock can technically "fit in the volume" while refusing to go through the rear door. If you own anything wider than 40 inches and oddly shaped, check the door dimensions before moving day.</p>
+
+  <h3 class="text-xl font-extrabold text-white mt-8 mb-3">DIY vs hired movers: the honest math</h3>
+  <p class="mb-4">The DIY vs movers debate is usually argued with vibes. Here is the math instead. A DIY move has four cost components: the truck rental (daily rate times the number of days, which scales with distance), the mileage fee, fuel, and packing supplies. For a local move under 100 miles, a two-bedroom DIY move commonly lands between $150 and $450 all-in. The truck is cheap for short distances; your labor is the subsidy.</p>
+  <p class="mb-4">Hired movers for a local move charge by the hour: roughly $110 per hour for a two-person crew, $150 for three people, and $195 for four. A two-bedroom local move takes a three-person crew about 5 to 7 hours including loading, driving, and unloading, which puts the typical bill between $750 and $1,100 before tips. The crew size scales with volume — under 400 cubic feet gets two movers, 400 to 900 gets three, and anything bigger gets four — and the hours scale at roughly one extra hour per 140 cubic feet.</p>
+  <p class="mb-4">Long-distance moves flip the equation. Movers switch to weight- or volume-based linehaul pricing, roughly $1.15 per cubic foot plus about $2.80 per mile. A 600-cubic-foot, 500-mile move therefore quotes around $2,100. The DIY version of the same move still pays mileage and fuel on a thirsty truck — about $445 in mileage fees and $225 in fuel alone — plus two or three days of rental and your own aching back. The DIY discount shrinks from 60 percent locally to roughly 30 percent on long hauls, which is why MoveMate shows both numbers side by side instead of declaring a universal winner.</p>
+  <p class="mb-4">The non-dollar factors deserve equal weight. Movers bring equipment (dollies, blankets, straps), experience with stairs and tight corners, and basic valuation coverage if they drop your TV. DIY gives you total schedule control and, frankly, the only guarantee that your boxes are packed the way you like. A common middle path is the hybrid move: hire labor-only help for the heavy furniture loading through a marketplace, and drive the truck yourself. You keep the cost down and your spine intact.</p>
+
+  <h3 class="text-xl font-extrabold text-white mt-8 mb-3">Hidden moving costs people always forget</h3>
+  <p class="mb-4">The quote is never the total. Utility deposits and connection fees at the new place commonly run $100 to $300. Cleaning — either a move-out cleaner for your old place or supplies for the new one — is another $50 to $200. If your move spans a meal gap, eating out for two or three days adds up fast; pack a cooler. Parking permits for the truck in dense cities can cost $50 to $150 and require days of advance paperwork. Storage, if your dates do not line up, starts around $100 a month for a small unit and is the single most common budget-buster in delayed moves.</p>
+  <p class="mb-4">Then there is the damage lottery. Rental truck insurance runs $20 to $30 per day and is worth it — the alternative is explaining a scraped bumper to a rental agent. Mover valuation coverage is included at a token $0.60 per pound by default, which means your $2,000 laptop is "covered" for about $4; full-value protection costs extra but is the only coverage that matters for electronics and antiques. Finally, tips: $20 to $40 per mover for a half-day job, $40 to $80 for a full day, in cash. Budget it in advance so it does not feel like a surprise.</p>
+
+  <h3 class="text-xl font-extrabold text-white mt-8 mb-3">How to cut your moving costs without regrets</h3>
+  <p class="mb-4">The cheapest box is the one you never move. Decluttering before you pack is the only cost-cutting move that saves money in every category at once: fewer boxes to buy, a smaller truck to rent, fewer mover hours to pay for, less fuel to burn. Be ruthless with the garage, the linen closet, and the "miscellaneous" drawer. If you have not used it in a year and it costs less than $20 to replace, it is cheaper to donate it than to move it — especially on long-distance moves where every cubic foot has a price tag.</p>
+  <p class="mb-4">Timing is the second lever. Movers and truck rentals both price on demand: summer weekends and the first and last days of the month are peak, mid-month weekdays in winter are the floor. Shifting a local move from the 31st to the 14th can cut a mover quote by 20 to 30 percent. Booking early locks the rate before the seasonal surge. And get free boxes where quality does not matter — liquor stores and bookstores give away the sturdiest small boxes in retail — but buy new boxes for anything fragile, because a crushed corner on a used box is how dishes die.</p>
+  <p class="mb-4">The third lever is tax and employer math that people leave on the table. If you are relocating for work, ask about a relocation stipend before you spend a dollar — many employers cover $2,000 to $5,000 without advertising it. Keep every receipt regardless; some moves qualify for tax deductions depending on your jurisdiction and employment situation, and a clean paper trail is free to maintain.</p>
+
+  <h3 class="text-xl font-extrabold text-white mt-8 mb-3">Your moving-week timeline, day by day</h3>
+  <p class="mb-4">Moves fail on logistics, not lifting. Two weeks out, book the truck or movers, start decluttering, and begin packing non-essentials — books, decor, off-season clothes. Confirm everything in writing; a verbal truck reservation is a rumor. One week out, buy supplies using your box estimate, pack room by room, schedule utility transfers for both addresses, and file your change of address. Two days out, pack the essentials bag (chargers, toiletries, medications, snacks, important documents), disassemble large furniture and bag the hardware with it, and defrost the freezer.</p>
+  <p class="mb-4">On moving day, load heavy items first and low, strap everything, and photograph every empty room plus your meter readings — those photos settle deposit disputes. Do a final sweep of closets, the attic, the garage, and any storage unit; the most commonly abandoned items are shower curtains, the broom, and one entire closet everyone forgot. After the move, unpack the essentials bag first, then the kitchen, then bedrooms. Check every box against your inventory before the movers leave, update your address with banks and insurers, and break down boxes immediately — a hallway full of cardboard is how a new home stays chaotic for a month.</p>
+  <p class="mb-4">MoveMate's built-in timeline checklist follows exactly this sequence, and your progress saves in the browser so you can close the tab and pick up where you left off. Combined with the volume math, the truck recommendation, the box count, and the DIY vs mover comparison, you have the full plan — not just a number, but the number plus what to do about it.</p>
+
+  <h2 class="text-2xl font-black text-white mt-10 mb-5">Frequently asked questions</h2>
+  <div class="space-y-3">
+    <details class="faq">
+      <summary>How much does it cost to move a one-bedroom apartment?</summary>
+      <p class="mt-2 text-slate-300">A local one-bedroom move (300–500 cubic feet) typically costs $300–$700 DIY with a rental truck, or $500–$1,200 with professional movers. MoveMate estimates both options side by side from your actual inventory.</p>
+    </details>
+    <details class="faq">
+      <summary>How many boxes do I need to move?</summary>
+      <p class="mt-2 text-slate-300">Plan on one box per 3–3.5 cubic feet: roughly 60 boxes for a studio, 125 for a one-bedroom, 190 for a two-bedroom, and 300+ for a three-bedroom home. Split them about 45% small, 35% medium, 20% large. MoveMate calculates the exact count from your inventory volume.</p>
+    </details>
+    <details class="faq">
+      <summary>What size moving truck do I need?</summary>
+      <p class="mt-2 text-slate-300">A cargo van or 10-ft truck handles a studio, a 15-ft truck suits a two-bedroom, and a 20–26 ft truck covers three to four bedrooms. Always add a 20% loading margin. MoveMate recommends the smallest truck that fits your inventory.</p>
+    </details>
+    <details class="faq">
+      <summary>Is it cheaper to move yourself or hire movers?</summary>
+      <p class="mt-2 text-slate-300">DIY is usually 40–60% cheaper for local moves but the gap narrows on long-distance hauls where mileage and fuel add up. Movers also save hours of heavy labor. MoveMate shows both totals with a full breakdown so you can decide.</p>
+    </details>
+    <details class="faq">
+      <summary>How far in advance should I book movers or a rental truck?</summary>
+      <p class="mt-2 text-slate-300">Book movers 4–8 weeks ahead for summer or end-of-month dates, at least 2 weeks ahead off-season. Rental trucks need 1–2 weeks except on holiday weekends. MoveMate's timeline checklist starts 14 days out.</p>
+    </details>
+    <details class="faq">
+      <summary>How do movers calculate the volume of my belongings?</summary>
+      <p class="mt-2 text-slate-300">Each item gets a packed cubic-foot volume (a 3-seat sofa ≈ 60 ft³, a queen bed set ≈ 50 ft³), summed and padded with a loading margin. MoveMate uses the same method with a 50+ item volume table.</p>
+    </details>
+  </div>
+</article>
+
+<footer class="border-t" style="border-color:#323c58;">
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 py-6 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-400">
+    <span><span class="font-black"><span class="brand-orange">Move</span><span class="brand-sky">Mate</span></span> · Free moving cost estimator</span>
+    <nav><a href="#top" class="hover:text-white mr-5">Home</a><a href="https://fixoraa.tech" class="brand-orange hover:underline">More Tools</a></nav>
+  </div>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+  var M = MoveMate;
+  var $ = function (id) { return document.getElementById(id); };
+
+  var state = { room: 'all', query: '', inv: {} }; // inv: itemId -> qty
+  var LS_INV = 'movemate-inv-v1';
+  var LS_TL = 'movemate-timeline-v1';
+
+  try {
+    var saved = JSON.parse(localStorage.getItem(LS_INV) || '{}');
+    if (saved && typeof saved === 'object') state.inv = saved;
+  } catch (e) {}
+
+  function saveInv() {
+    try { localStorage.setItem(LS_INV, JSON.stringify(state.inv)); } catch (e) {}
+  }
+
+  function invLines() {
+    return Object.keys(state.inv).map(function (id) { return { itemId: id, qty: state.inv[id] }; });
+  }
+
+  function totalQty() {
+    var n = 0;
+    Object.keys(state.inv).forEach(function (id) { n += state.inv[id]; });
+    return n;
+  }
+
+  /* ---- room tabs ---- */
+  function renderTabs() {
+    var tabs = [{ id: 'all', label: 'All rooms' }].concat(M.ROOMS);
+    $('roomTabs').innerHTML = tabs.map(function (t) {
+      var cls = 'room-tab' + (state.room === t.id ? ' active' : '');
+      return '<button class="' + cls + '" data-room="' + t.id + '">' + t.label + '</button>';
+    }).join('');
+    Array.prototype.forEach.call($('roomTabs').querySelectorAll('button'), function (b) {
+      b.addEventListener('click', function () { state.room = b.getAttribute('data-room'); renderTabs(); renderGrid(); });
+    });
+  }
+
+  /* ---- item grid ---- */
+  function renderGrid() {
+    var items = M.searchItems(state.query, state.room);
+    if (!items.length) {
+      $('itemGrid').innerHTML = '<div class="text-sm text-slate-500 py-6 text-center">No items match your search.</div>';
+      return;
+    }
+    $('itemGrid').innerHTML = items.map(function (it) {
+      var q = state.inv[it.id] || 0;
+      return '<div class="flex items-center justify-between gap-2 rounded-xl px-3 py-2" style="background:#12172a;border:1px solid #323c58;">' +
+        '<div class="min-w-0"><div class="text-sm font-semibold truncate">' + it.name + '</div>' +
+        '<div class="text-xs text-slate-500">' + it.vol + ' ft&sup3; · ' + M.roomLabel(it.room) + '</div></div>' +
+        '<div class="flex items-center gap-1.5 shrink-0">' +
+        '<button class="qty-btn" data-act="dec" data-id="' + it.id + '">−</button>' +
+        '<span class="w-6 text-center text-sm font-extrabold">' + q + '</span>' +
+        '<button class="qty-btn" data-act="inc" data-id="' + it.id + '">+</button>' +
+        '</div></div>';
+    }).join('');
+    Array.prototype.forEach.call($('itemGrid').querySelectorAll('button'), function (b) {
+      b.addEventListener('click', function () {
+        var id = b.getAttribute('data-id');
+        var act = b.getAttribute('data-act');
+        var q = state.inv[id] || 0;
+        q = act === 'inc' ? q + 1 : q - 1;
+        if (q <= 0) delete state.inv[id]; else state.inv[id] = q;
+        saveInv(); renderGrid(); renderInv(); recalc();
+      });
+    });
+  }
+
+  /* ---- inventory list ---- */
+  function renderInv() {
+    var lines = invLines();
+    $('invCount').textContent = totalQty() + ' item' + (totalQty() === 1 ? '' : 's');
+    if (!lines.length) {
+      $('invList').innerHTML = '<div class="text-xs text-slate-500">Nothing yet — tap + on items above, or try the presets below.</div>' +
+        '<div class="flex flex-wrap gap-2 mt-2">' +
+        '<button id="presetStudio" class="room-tab">Studio preset</button>' +
+        '<button id="preset2br" class="room-tab">2-BR preset</button>' +
+        '</div>';
+      var ps = $('presetStudio'), p2 = $('preset2br');
+      if (ps) ps.addEventListener('click', function () { loadPreset('studio'); });
+      if (p2) p2.addEventListener('click', function () { loadPreset('2br'); });
+      return;
+    }
+    $('invList').innerHTML = lines.map(function (l) {
+      var it = M.getItem(l.itemId);
+      return '<div class="flex items-center justify-between rounded-lg px-2.5 py-1.5" style="background:#12172a;border:1px solid #323c58;">' +
+        '<span class="truncate">' + it.name + ' <span class="text-slate-500">× ' + l.qty + '</span></span>' +
+        '<button class="text-rose-300 text-xs font-bold hover:text-rose-200" data-rm="' + l.itemId + '">remove</button></div>';
+    }).join('');
+    Array.prototype.forEach.call($('invList').querySelectorAll('[data-rm]'), function (b) {
+      b.addEventListener('click', function () {
+        delete state.inv[b.getAttribute('data-rm')];
+        saveInv(); renderGrid(); renderInv(); recalc();
+      });
+    });
+  }
+
+  var PRESETS = {
+    studio: { 'twin-bed': 1, 'dresser': 1, 'nightstand': 1, 'sofa-3': 1, 'coffee-table': 1, 'tv-55': 1, 'desk': 1, 'office-chair': 1, 'microwave': 1, 'dining-chair': 2, 'box-medium': 20, 'box-small': 12 },
+    '2br': { 'queen-bed': 2, 'dresser': 2, 'nightstand': 3, 'wardrobe': 1, 'sofa-3': 1, 'armchair': 1, 'coffee-table': 1, 'bookshelf': 1, 'tv-55': 1, 'tv-stand': 1, 'dining-table': 1, 'dining-chair': 4, 'fridge': 1, 'range': 1, 'microwave': 1, 'desk': 1, 'office-chair': 1, 'vanity': 1, 'box-medium': 40, 'box-small': 25, 'box-large': 12 }
+  };
+
+  function loadPreset(name) {
+    state.inv = {};
+    Object.keys(PRESETS[name]).forEach(function (id) { state.inv[id] = PRESETS[name][id]; });
+    saveInv(); renderGrid(); renderInv(); recalc();
+  }
+
+  /* ---- results ---- */
+  function money(n) { return M.fmtMoney(n); }
+
+  function recalc() {
+    var lines = invLines();
+    var vol = M.inventoryVolume(lines);
+    var m3 = M.ft3ToM3(vol);
+    var dist = Math.max(0, Number($('distInput').value) || 0);
+
+    $('volFt3').textContent = vol.toLocaleString('en-US');
+    $('volM3').textContent = m3.toLocaleString('en-US');
+
+    /* truck */
+    var rec = M.recommendTruck(vol);
+    var t = rec.truck;
+    if (!t) {
+      $('truckName').textContent = vol === 0 ? 'Add items to get a recommendation' : 'Exceeds the largest rental truck';
+      $('truckCap').textContent = '';
+      $('truckFill').style.width = '100%';
+      $('truckDims').textContent = rec.needsTwoTrips
+        ? 'Your load is bigger than a 26-ft truck (1,410 ft³). Plan two trips with a 20-ft truck or get a full-service mover quote.'
+        : '';
+    } else {
+      $('truckName').textContent = 'Recommended: ' + t.name;
+      $('truckCap').textContent = t.capacity.toLocaleString('en-US') + ' ft³ capacity';
+      $('truckFill').style.width = Math.min(100, Math.round((vol / t.capacity) * 100)) + '%';
+      $('truckDims').textContent = 'Cargo box: ' + t.box + ' · Seats ' + t.seats + ' · ~$' + t.daily + '/day rental';
+    }
+    $('truckTable').innerHTML = rec.all.map(function (r) {
+      var mark = r.id === (t && t.id) ? '<span class="brand-orange font-extrabold">← best fit</span>' : (r.fits ? '<span class="text-emerald-300">fits</span>' : '<span class="text-slate-500">too small</span>');
+      return '<div class="flex items-center justify-between rounded-lg px-3 py-1.5" style="background:#12172a;border:1px solid #323c58;">' +
+        '<span class="font-semibold">' + r.name + ' <span class="text-slate-500 font-normal">' + r.capacity.toLocaleString('en-US') + ' ft³</span></span>' + mark + '</div>';
+    }).join('');
+
+    /* packing */
+    var mat = M.packingMaterials(vol, lines);
+    $('packSmall').textContent = mat.small;
+    $('packMedium').textContent = mat.medium;
+    $('packLarge').textContent = mat.large;
+    $('packTotal').textContent = mat.totalBoxes;
+    $('tapeRolls').textContent = mat.tapeRolls;
+    $('bubbleWrap').textContent = mat.bubbleWrapFt;
+    $('paperLbs').textContent = mat.paperLbs;
+    $('stretchRolls').textContent = mat.stretchRolls;
+    $('mattressBags').textContent = mat.mattressBags;
+    $('matCost').textContent = money(M.materialsCost(mat));
+
+    /* DIY vs movers */
+    var cmp = M.compareMoves(vol, dist, lines);
+    var diy = cmp.diy, mv = cmp.movers;
+    $('diyLow').textContent = money(diy.low);
+    $('diyMid').textContent = money(diy.mid);
+    $('diyHigh').textContent = money(diy.high);
+    $('diyBreakdown').innerHTML =
+      '<div class="flex justify-between"><span>Truck rental (' + diy.days + ' day' + (diy.days > 1 ? 's' : '') + ', ' + diy.truck.name + ')</span><span>' + money(diy.parts.rental) + '</span></div>' +
+      '<div class="flex justify-between"><span>Mileage (' + dist + ' mi)</span><span>' + money(diy.parts.mileage) + '</span></div>' +
+      '<div class="flex justify-between"><span>Fuel</span><span>' + money(diy.parts.fuel) + '</span></div>' +
+      '<div class="flex justify-between"><span>Boxes &amp; supplies</span><span>' + money(diy.parts.supplies) + '</span></div>';
+    $('moverLow').textContent = money(mv.low);
+    $('moverMid').textContent = money(mv.mid);
+    $('moverHigh').textContent = money(mv.high);
+    if (mv.kind === 'local') {
+      $('moverDetail').innerHTML =
+        '<div class="flex justify-between"><span>Crew</span><span>' + mv.crew + ' movers @ $' + mv.hourlyRate + '/hr</span></div>' +
+        '<div class="flex justify-between"><span>Estimated time</span><span>' + mv.hours + ' hrs</span></div>' +
+        '<div class="text-slate-500">Local move pricing · tip not included</div>';
+    } else {
+      $('moverDetail').innerHTML =
+        '<div class="flex justify-between"><span>Linehaul (' + dist + ' mi)</span><span>' + money(mv.parts.linehaul) + '</span></div>' +
+        '<div class="flex justify-between"><span>Volume charge</span><span>' + money(mv.parts.volumeFee) + '</span></div>' +
+        '<div class="text-slate-500">Long-distance pricing · get a written binding quote</div>';
+    }
+    var verdict;
+    if (vol === 0) {
+      verdict = '<span class="text-slate-400">Add items to compare costs.</span>';
+    } else if (cmp.cheaper === 'tie') {
+      verdict = 'Both options cost about the same.';
+    } else if (cmp.cheaper === 'diy') {
+      verdict = '<span class="brand-orange">DIY saves you about ' + money(cmp.savingsByDIY) + '</span> <span class="text-slate-400 font-normal">— but costs you a full day of heavy lifting.</span>';
+    } else {
+      verdict = '<span class="brand-sky">Movers cost about ' + money(cmp.savingsByDIY) + ' more</span> <span class="text-slate-400 font-normal">— worth it if stairs, distance, or your back are factors.</span>';
+    }
+    $('compareVerdict').innerHTML = verdict;
+  }
+
+  /* ---- timeline ---- */
+  function loadTlState() {
+    try { return JSON.parse(localStorage.getItem(LS_TL) || '{}'); } catch (e) { return {}; }
+  }
+  function renderTimeline() {
+    var done = loadTlState();
+    $('timelineList').innerHTML = M.buildTimeline().map(function (p, pi) {
+      var tasks = p.tasks.map(function (task, ti) {
+        var key = pi + '-' + ti;
+        var checked = done[key] ? ' checked' : '';
+        return '<label class="flex items-start gap-2.5 rounded-lg px-3 py-2 cursor-pointer hover:bg-white/5" style="border:1px solid #323c58;">' +
+          '<input type="checkbox" data-tl="' + key + '"' + checked + ' class="mt-1 accent-orange-400">' +
+          '<span class="text-sm ' + (done[key] ? 'line-through text-slate-500' : 'text-slate-200') + '">' + task + '</span></label>';
+      }).join('');
+      return '<div><h3 class="text-sm font-extrabold mb-2"><span class="brand-sky">' + p.phase + '</span></h3><div class="space-y-1.5">' + tasks + '</div></div>';
+    }).join('');
+    Array.prototype.forEach.call($('timelineList').querySelectorAll('[data-tl]'), function (cb) {
+      cb.addEventListener('change', function () {
+        var d = loadTlState();
+        if (cb.checked) d[cb.getAttribute('data-tl')] = 1; else delete d[cb.getAttribute('data-tl')];
+        try { localStorage.setItem(LS_TL, JSON.stringify(d)); } catch (e) {}
+        renderTimeline();
+      });
+    });
+  }
+
+  /* ---- wire up ---- */
+  $('searchInput').addEventListener('input', function (e) { state.query = e.target.value; renderGrid(); });
+  $('clearInv').addEventListener('click', function () { state.inv = {}; saveInv(); renderGrid(); renderInv(); recalc(); });
+  $('distInput').addEventListener('input', recalc);
+
+  renderTabs();
+  renderGrid();
+  renderInv();
+  renderTimeline();
+  recalc();
+})();
+</script>
+</body>
+</html>
